@@ -591,7 +591,7 @@ namespace librealsense
                 struct stat st = {};
                 if (stat(path.c_str(), &st) < 0)
                 {
-                    throw linux_backend_exception(to_string() << "Cannot identify '" << path);
+                    throw linux_backend_exception(rsutils::string::from() << "Cannot identify '" << path);
                 }
 
                 if (std::stoi(major_string) == major(st.st_rdev) && std::stoi(minor_string) == minor(st.st_rdev))
