@@ -546,78 +546,63 @@ namespace librealsense
             }
         }
 
-        bool get_devname_from_video_path(const std::string video_path, std::string& dev_name)
+        std::string get_devname_from_video_path(const std::string& video_path)
         {
+            std::string dev_name;
+
             std::ifstream uevent_file(video_path + "/uevent");
+            if (!uevent_file)
+            {
+                LOG_INFO("Cannot access " + video_path + "/uevent");
+                return dev_name;
+            }
+
             std::string uevent_line, major_string, minor_string;
             while (std::getline(uevent_file, uevent_line) && (major_string.empty() || minor_string.empty()))
             {
                 if (uevent_line.find("MAJOR=") != std::string::npos)
                 {
                     major_string = uevent_line.substr(uevent_line.find_last_of('=') + 1);
-                    std::cout << "major_string: " << major_string << std::endl;
                 }
                 else if (uevent_line.find("MINOR=") != std::string::npos)
                 {
                     minor_string = uevent_line.substr(uevent_line.find_last_of('=') + 1);
-                    std::cout << "minor_string: " << minor_string << std::endl;
                 }
             }
             uevent_file.close();
 
             if (major_string.empty() || minor_string.empty())
             {
-                std::cout << "No Major or Minor string found" << std::endl;
-                std::cout << "video_path: " << video_path << std::endl;
-                std::cout << "dev_name: " << dev_name << std::endl;
-                return false;
+                LOG_INFO("No Major or Minor number found for " + video_path);
+                return dev_name;
             }
 
             DIR * dir = opendir("/dev");
-            if(!dir)
+            if (!dir)
             {
                 LOG_INFO("Cannot access /dev");
-                return false;
+                return dev_name;
             }
             while (dirent * entry = readdir(dir))
             {
                 std::string name = entry->d_name;
-                if(name == "." || name == "..") continue;
-
-                // Resolve a pathname to ignore virtual video devices and  sub-devices
-                static const std::regex video_dev_pattern("(\\/video\\d+)$");
-
                 std::string path = "/dev/" + name;
-                std::string real_path{};
-                char buff[PATH_MAX] = {0};
-                if (realpath(path.c_str(), buff) != nullptr)
+
+                struct stat st = {};
+                if (stat(path.c_str(), &st) < 0)
                 {
-                    real_path = std::string(buff);
-                    if (real_path.find("virtual") != std::string::npos)
-                        continue;
-                    if (!std::regex_search(real_path, video_dev_pattern))
-                    {
-                        //LOG_INFO("Skipping Video4Linux entry " << real_path << " - not a device");
-                        continue;
-                    }
-                    struct stat st = {};
-                    if(stat(real_path.c_str(), &st) < 0)
-                    {
-                        throw linux_backend_exception(to_string() << "Cannot identify '" << real_path);
-                    }
-                    if(!S_ISCHR(st.st_mode))
-                        throw linux_backend_exception(real_path + " is no device");
-                    if (std::stoi(major_string) == major(st.st_rdev) && std::stoi(minor_string) == minor(st.st_rdev))
-                    {
-                        dev_name = name;
-                        closedir(dir);
-                        return true;
-                    }
+                    throw linux_backend_exception(to_string() << "Cannot identify '" << path);
+                }
+
+                if (std::stoi(major_string) == major(st.st_rdev) && std::stoi(minor_string) == minor(st.st_rdev))
+                {
+                    dev_name = name;
+                    break;
                 }
             }
             closedir(dir);
 
-            return false;
+            return dev_name;
         }
 
         std::vector<std::string> v4l_uvc_device::get_video_paths()
@@ -651,16 +636,11 @@ namespace librealsense
                         //LOG_INFO("Skipping Video4Linux entry " << real_path << " - not a device");
                         continue;
                     }
-                    std::string dummy;
-                    if (get_devname_from_video_path(real_path, dummy))
+                    if (!get_devname_from_video_path(real_path).empty())
                     {
-                        std::cout << "real_path: " << real_path << std::endl;
-                        std::cout << "dev_name: " << dummy << std::endl;
-                        std::cout << "____________________________________________" << std::endl;
                         video_paths.push_back(real_path);
                     }
                 }
-                //video_paths.push_back(real_path);
             }
             closedir(dir);
 
@@ -724,9 +704,7 @@ namespace librealsense
         uvc_device_info v4l_uvc_device::get_info_from_usb_device_path(const std::string& video_path, const std::string& name)
         {
             std::string busnum, devnum, devpath;
-            std::string dummy;
-            get_devname_from_video_path(video_path, dummy);
-            auto dev_name = "/dev/" + dummy;
+            auto dev_name = "/dev/" + get_devname_from_video_path(video_path);
 
             if (!is_usb_path_valid(video_path, dev_name, busnum, devnum, devpath))
             {
@@ -739,7 +717,6 @@ namespace librealsense
             }
 
             LOG_INFO("Enumerating UVC " << name << " realpath=" << video_path);
-            std::cout << "Enumerating UVC " << name << " realpath=" << video_path << std::endl;
             uint16_t vid{}, pid{}, mi{};
             usb_spec usb_specification(usb_undefined);
 
@@ -773,16 +750,6 @@ namespace librealsense
             info.unique_id = busnum + "-" + devpath + "-" + devnum;
             info.conn_spec = usb_specification;
             info.uvc_capabilities = get_dev_capabilities(dev_name);
-
-            std::cout << "___________________________________________" << std::endl;
-            std::cout << "info.pid: " << info.pid << std::endl;
-            std::cout << "info.vid: " << info.vid << std::endl;
-            std::cout << "info.mi: " << info.mi << std::endl;
-            std::cout << "info.device_path: " << info.device_path << std::endl;
-            std::cout << "info.unique_id: " << info.unique_id << std::endl;
-            std::cout << "info.conn_spec: " << (int) info.conn_spec << std::endl;
-            std::cout << "info.uvc_capabilities: " << info.uvc_capabilities << std::endl;
-            std::cout << "___________________________________________" << std::endl;
 
             return info;
         }
@@ -827,9 +794,7 @@ namespace librealsense
             usb_spec usb_specification(usb_undefined);
             std::string bus_info, card;
 
-            std::string dummy;
-            get_devname_from_video_path(video_path, dummy);
-            auto dev_name = "/dev/" + dummy;
+            auto dev_name = "/dev/" + get_devname_from_video_path(video_path);
 
             get_mipi_device_info(dev_name, bus_info, card);
 
@@ -995,15 +960,12 @@ namespace librealsense
                         continue;
                     }
 
-                    std::string dummy;
-                    get_devname_from_video_path(video_path, dummy);
-                    auto dev_name = "/dev/" + dummy;
+                    auto dev_name = "/dev/" + get_devname_from_video_path(video_path);
                     uvc_nodes.emplace_back(info, dev_name);
                 }
                 catch(const std::exception & e)
                 {
                     LOG_INFO("Not a USB video device: " << e.what());
-                    std::cout << "Not a USB video device: " << e.what() << std::endl;
                 }
             }
 
